@@ -2,9 +2,10 @@
 
 1. Change `pins.env` or `patches/` in a pull request. CI builds every image and boot-tests Linux in QEMU.
 2. After merging, run the **Build images** workflow manually with **release** checked. It publishes a
-   A manual run without **release** is a dry run: it collects the same files into a `release-files`
-   artifact without publishing.
-   release `images-YYYYMMDD-N` with all files, their sha256 sums and the pins.
+   release `images-YYYYMMDD` (`images-YYYYMMDD.2`, ... for more releases on the same day) with all
+   files, their sha256 sums and the pins, and mirrors the flashable files on GitHub Pages for the web
+   Flasher. A manual run without **release** is a dry run: it collects the same files into a
+   `release-files` artifact without publishing.
 3. Test the release on silicon and note the results in the release description. Silicon testing is
    manual for now.
 

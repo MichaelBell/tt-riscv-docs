@@ -193,7 +193,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="images-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          # images-YYYYMMDD; a second release on the same day gets .2, then .3, ...
+          base="images-$(date -u +%Y%m%d)"
+          tag=$base n=1
+          while gh release view "$tag" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; do
+            n=$((n + 1)); tag="$base.$n"
+          done
           gh release create "$tag" rel/* --title "$tag" --notes-file notes.md
       # Mirror the release on GitHub Pages: release assets have no CORS headers, so the web
       # Flasher's presets download from here. The SDK is left out (only needed as a release asset).
