@@ -41,7 +41,7 @@ linked like a C program:
        librust_nostd_hello.a "-Wl,-elf2flt=-r -s 16384" -Wl,-gc-sections -o rust_nostd_hello
    ```
 
-The source is in [`linux/apps/rust-nostd`](../../linux/apps/rust-nostd), with a Makefile that runs the two steps
+The source is in [`linux/apps/rust-nostd`](../linux/apps/rust-nostd), with a Makefile that runs the two steps
 above. The image build includes it through the Buildroot external tree in `linux/br2-external`. To change
 it, edit the crate and either rebuild the image ([building.md](building.md)), or build just the program with
 the SDK and try it in QEMU ([linux-apps.md](linux-apps.md)).
