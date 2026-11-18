@@ -10,7 +10,8 @@ Every guide in this repo uses the same setup.
 - A [QSPI Pmod](https://github.com/mole99/qspi-pmod) (16 MiB flash + 2 x 8 MiB PSRAM), from the
   [Tiny Tapeout store](https://store.tinytapeout.com/products/QSPI-Pmod-p716541602). Plug it into the
   **BIDIR (uio)** Pmod port.
-- A USB cable and a Chromium-based browser (Chrome, Edge) for the web tools, which use Web Serial.
+- A USB cable and a desktop browser with Web Serial for the web tools: Chrome, Edge (or another
+  Chromium-based browser), or Firefox 151 or later. Safari does not support Web Serial.
 
 ## Tools
 
