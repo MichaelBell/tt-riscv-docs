@@ -136,6 +136,10 @@ jobs:
     runs-on: ubuntu-26.04
     permissions:
       contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -191,3 +195,19 @@ jobs:
         run: |
           tag="images-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
           gh release create "$tag" rel/* --title "$tag" --notes-file notes.md
+      # Mirror the release on GitHub Pages: release assets have no CORS headers, so the web
+      # Flasher's presets download from here. The SDK is left out (only needed as a release asset).
+      - name: Prepare the Pages mirror
+        if: inputs.release
+        run: |
+          mkdir -p pages/images/latest
+          cp rel/* pages/images/latest/
+          rm -f pages/images/latest/kianv-ulinux-sdk.tar.gz
+      - uses: actions/configure-pages@v6
+        if: inputs.release
+      - uses: actions/upload-pages-artifact@v5
+        if: inputs.release
+        with:
+          path: pages
+      - uses: actions/deploy-pages@v5
+        if: inputs.release
