@@ -1,0 +1,26 @@
+--- a/std/src/sys/pal/unix/stack_overflow/mod.rs
++++ b/std/src/sys/pal/unix/stack_overflow/mod.rs
+@@ -10,6 +10,11 @@
+     // usually have fewer qualms about forwards compatibility, since the runtime
+     // is shipped with the OS):
+     // <https://github.com/apple/swift/blob/swift-5.10-RELEASE/stdlib/public/runtime/CrashHandlerMacOS.cpp>
++    // No MMU on riscv32 uClibc-ng (KianV): no guard pages and no mprotect, so no handler.
++    all(target_os = "linux", target_env = "uclibc", target_arch = "riscv32") => {
++        mod handler_none;
++        use handler_none as imp;
++    }
+     any(
+         target_os = "linux",
+         target_os = "freebsd",
+--- a/std/src/sys/sync/futex/unix.rs
++++ b/std/src/sys/sync/futex/unix.rs
+@@ -15,7 +15,8 @@
+ cfg_select! {
+     // riscv32 only exposes the `SYS_futex_time64` syscall,
+     // whereas other 32-bit targets also expose `SYS_futex`, which uses 32-bit time.
+-    target_arch = "riscv32" => {
++    // uClibc-ng on rv32 nommu uses 32-bit time_t, and its kernel enables the time32 futex.
++    all(target_arch = "riscv32", not(target_env = "uclibc")) => {
+         use libc::SYS_futex_time64 as SYS_futex;
+     }
+     _ => {

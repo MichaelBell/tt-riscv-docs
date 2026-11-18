@@ -1,0 +1,21 @@
+#!/bin/sh
+# Linker wrapper for riscv32ima-unknown-linux-uclibc (KianV uLinux, no MMU).
+# rustc links a static PIE; the KianV kernel needs a FLAT binary, which the
+# Buildroot gcc produces through its elf2flt ld wrapper (-Wl,-elf2flt=-r).
+# Needs KIANV_CC (Buildroot riscv32-buildroot-linux-uclibc-gcc) and
+# KIANV_SHIM (kianv_pthread.o) in the environment.
+set -e
+for a in "$@"; do
+    case "$a" in
+        -static-pie) set -- "$@" -static -pie ;;
+        -no-pie) ;;
+        # uClibc-ng is built without threads (pthreads come from KIANV_SHIM) and
+        # panic=abort needs no unwinder.
+        -lpthread|-lgcc_eh) ;;
+        *) set -- "$@" "$a" ;;
+    esac
+    shift
+done
+exec "$KIANV_CC" "$@" "$KIANV_SHIM" -lc -lgcc \
+    -Wl,--wrap=malloc,--wrap=free,--wrap=realloc,--wrap=calloc,--wrap=memalign,--wrap=posix_memalign \
+    -Wl,-elf2flt=-r

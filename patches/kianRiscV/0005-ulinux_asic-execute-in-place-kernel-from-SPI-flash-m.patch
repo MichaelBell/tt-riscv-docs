@@ -1,0 +1,570 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Uri Shaked <uri@urishaked.com>
+Date: Tue, 17 Nov 2026 15:24:32 +0000
+Subject: [PATCH 5/7] ulinux_asic: execute-in-place kernel from SPI flash (make
+ xip)
+
+Add CONFIG_NOMMU_XIP_KERNEL: a no-MMU RISC-V kernel whose text, rodata
+and built-in initramfs run from the memory-mapped SPI flash at
+0x20200000, with data/bss in PSRAM. head.S copies the data section from
+flash itself, so the XIP bootloader only jumps to the flash and no longer
+needs IMAGE_SIZE. Jump labels, preempt-dynamic keys and alternatives are
+disabled because they patch kernel text.
+
+The bootloader also gets WORD_COPY=1 for the normal (copying) boot: one
+32-bit flash read and PSRAM write per word instead of per byte.
+
+On ttsky25a silicon: reset to shell 209 s (byte copy) / 152 s (word copy)
+/ 128 s (XIP); MemTotal 13968 -> 15768 KB. Execution speed unchanged.
+
+Targets: make xip (xip/Image + xip/bootloader.bin), make xip-sim (QEMU pflash).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ asic/os/ulinux_asic_kianv_soc/Makefile        |  48 ++-
+ asic/os/ulinux_asic_kianv_soc/README.md       |  22 ++
+ ...-riscv-nommu-execute-in-place-kernel.patch | 298 ++++++++++++++++++
+ .../ulinux_asic_kianv_soc/bootloader/Makefile |   8 +-
+ .../bootloader/bootloader.c                   |  23 +-
+ asic/os/ulinux_asic_kianv_soc/xip/.gitignore  |   3 +
+ .../xip/linux-xip.fragment                    |   4 +
+ asic/os/ulinux_asic_kianv_soc/xip/mkflash.py  |   7 +
+ .../xip/qemu-flash-stub.S                     |   7 +
+ 9 files changed, 416 insertions(+), 4 deletions(-)
+ create mode 100644 asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch
+ create mode 100644 asic/os/ulinux_asic_kianv_soc/xip/.gitignore
+ create mode 100644 asic/os/ulinux_asic_kianv_soc/xip/linux-xip.fragment
+ create mode 100644 asic/os/ulinux_asic_kianv_soc/xip/mkflash.py
+ create mode 100644 asic/os/ulinux_asic_kianv_soc/xip/qemu-flash-stub.S
+
+diff --git a/asic/os/ulinux_asic_kianv_soc/Makefile b/asic/os/ulinux_asic_kianv_soc/Makefile
+index 6840965..ae05fea 100644
+--- a/asic/os/ulinux_asic_kianv_soc/Makefile
++++ b/asic/os/ulinux_asic_kianv_soc/Makefile
+@@ -22,7 +22,7 @@ DTS_FILE ?= bldroot/board/kianv/rv32ima/kianv.dts
+ OUTPUT_DTS_FILE ?= bldroot/board/kianv/rv32ima/kianv_updated.dts
+ OUTPUT_DTB_FILE ?= ./kianv.dtb
+ 
+-.PHONY: all bootloader build clone-buildroot customize_buildroot clean-bootloader clean help sim
++.PHONY: all bootloader build clone-buildroot customize_buildroot clean-bootloader clean help sim xip xip-sim
+ 
+ all: update-dts build buildroot
+ 	@echo "Build process completed."
+@@ -35,6 +35,9 @@ help:
+ 	@echo "  bootloader        Build the bootloader with configurable parameters"
+ 	@echo "  update-dts        Update the DTS file and generate a DTB file"
+ 	@echo "  sim               Run the QEMU simulation with the generated system image"
++	@echo "  xip               Build an execute-in-place kernel (xip/Image) + bootloader (xip/bootloader.bin)"
++	@echo "                    from the Buildroot kernel tree and rootfs (run after 'make all')"
++	@echo "  xip-sim           Boot xip/Image from a QEMU pflash, like the board does"
+ 	@echo "  clean             Clean all generated files"
+ 	@echo "  help              Display this help message"
+ 	@echo ""
+@@ -99,11 +102,52 @@ update-dts: $(DTS_FILE)
+ sim:
+ 	@qemu-system-riscv32 -M virt -bios none -kernel Image -append "rootwait root=/dev/vda ro"  -nographic -cpu rv32,mmu=off
+ 
++# --- Execute-in-place kernel -------------------------------------------------
++# Kernel .text/.rodata (and the built-in initramfs) stay in the SPI flash and
++# run from there; only .data/.bss go to PSRAM (copied by the kernel itself).
++# Flash layout: xip/bootloader.bin @0x100000, kianv.dtb @0x180000,
++# xip/Image @0x200000 (linked for 0x20200000: it cannot live anywhere else).
++XIP_DIR ?= xip/build
++XIP_LINUX_SRC ?= $(DIR)/output/build/linux-6.8-rc1
++XIP_TOOLCHAIN ?= $(abspath $(DIR))/output/host/bin/riscv32-buildroot-linux-uclibc-
++XIP_KMAKE = $(MAKE) -C $(XIP_DIR)/linux ARCH=riscv CROSS_COMPILE=$(XIP_TOOLCHAIN)
++
++xip:
++	@test -f $(XIP_LINUX_SRC)/.config || { echo "run 'make all' first"; exit 1; }
++	@grep -q NOMMU_XIP_KERNEL $(XIP_LINUX_SRC)/arch/riscv/Kconfig || \
++	  { echo "kernel tree lacks the XIP patch: run 'make customize_buildroot' and 'make -C $(DIR) linux-dirclean all'"; exit 1; }
++	mkdir -p $(XIP_DIR)
++	rsync -a --delete --exclude='*.o' --exclude='.*.cmd' --exclude='*.a' --exclude='/vmlinux*' \
++	  $(XIP_LINUX_SRC)/ $(XIP_DIR)/linux/
++	$(XIP_KMAKE) mrproper
++	cp $(XIP_LINUX_SRC)/.config $(XIP_DIR)/linux/.config
++	cd $(XIP_DIR)/linux && ARCH=riscv scripts/kconfig/merge_config.sh -m .config $(CURDIR)/xip/linux-xip.fragment
++	sed -i 's|^CONFIG_INITRAMFS_SOURCE=.*|CONFIG_INITRAMFS_SOURCE="$(abspath $(DIR))/output/images/rootfs.cpio"|' $(XIP_DIR)/linux/.config
++	$(XIP_KMAKE) olddefconfig
++	@grep -q '^CONFIG_NOMMU_XIP_KERNEL=y' $(XIP_DIR)/linux/.config
++	$(XIP_KMAKE) -j $(shell nproc) Image
++	cp $(XIP_DIR)/linux/arch/riscv/boot/Image xip/Image
++	rm -rf $(XIP_DIR)/bootloader && cp -r bootloader $(XIP_DIR)/bootloader
++	$(MAKE) -C $(XIP_DIR)/bootloader clean
++	$(MAKE) -C $(XIP_DIR)/bootloader TOOLCHAIN_PATH=$(abspath $(DIR))/output/host/bin \
++	  CPU_FREQ=$(CPU_FREQ) SPI_FREQ=$(SPI_FREQ) BAUDRATE=$(BAUDRATE) SOC_HAS_SPI=$(SOC_HAS_SPI) XIP_KERNEL=1
++	cp $(XIP_DIR)/bootloader/bootloader.bin xip/bootloader.bin
++	@echo "XIP kernel: xip/Image @0x200000, bootloader: xip/bootloader.bin @0x100000, dtb: kianv.dtb @0x180000"
++
++xip-sim: xip/Image
++	mkdir -p $(XIP_DIR)
++	$(XIP_TOOLCHAIN)gcc -march=rv32ima -mabi=ilp32 -nostdlib -Wl,-Ttext=0x20000000 -Wl,--no-relax \
++	  -o $(XIP_DIR)/qemu-flash-stub.elf xip/qemu-flash-stub.S
++	$(XIP_TOOLCHAIN)objcopy -O binary $(XIP_DIR)/qemu-flash-stub.elf $(XIP_DIR)/qemu-flash-stub.bin
++	python3 xip/mkflash.py $(XIP_DIR)/qemu-flash-stub.bin xip/Image $(XIP_DIR)/pflash0.bin
++	qemu-system-riscv32 -M virt -bios none -nographic -cpu rv32,mmu=off -m 16M \
++	  -drive if=pflash,unit=0,format=raw,file=$(XIP_DIR)/pflash0.bin
++
+ clean-bootloader:
+ 	@echo "Cleaning bootloader..."
+ 	$(MAKE) -C bootloader clean
+ 
+ clean: clean-bootloader
+ 	@echo "Cleaning Buildroot output directory..."
+-	@rm -rf $(DIR)/output $(OUTPUT_DTB_FILE) $(OUTPUT_DTS_FILE)
++	@rm -rf $(DIR)/output $(OUTPUT_DTB_FILE) $(OUTPUT_DTS_FILE) $(XIP_DIR) xip/Image xip/bootloader.bin
+ 
+diff --git a/asic/os/ulinux_asic_kianv_soc/README.md b/asic/os/ulinux_asic_kianv_soc/README.md
+index 93d7f10..e58b6a4 100644
+--- a/asic/os/ulinux_asic_kianv_soc/README.md
++++ b/asic/os/ulinux_asic_kianv_soc/README.md
+@@ -43,3 +43,25 @@ sudo apt install build-essential gcc g++ binutils patch tar gzip bzip2 xz-utils
+ 
+ That's it! Your system is now ready to use.
+ 
++
++## Execute-in-place (XIP) kernel
++
++`make xip` (after `make all`) builds `xip/Image`, a kernel whose text, rodata and built-in
++initramfs run directly from the SPI flash; only data and BSS (about 450 KB) live in PSRAM, and
++the kernel copies its data section itself. `xip/bootloader.bin` just jumps to the flash.
++Flash it as: `xip/bootloader.bin` @0x100000, `kianv.dtb` @0x180000, `xip/Image` @0x200000
++(the Image is linked for 0x20200000 and works nowhere else). `make xip-sim` boots it in QEMU
++from a pflash.
++
++Measured on ttsky25a silicon (30 MHz), same rootfs:
++
++| | byte-copy bootloader | `WORD_COPY=1` bootloader | XIP |
++|---|---|---|---|
++| bootloader copy | 79 s | 22 s | none |
++| reset to `/ # ` | 209 s | 152 s | 128 s |
++| MemTotal / MemFree after boot | 13968 / 10396 KB | same | 15768 / 12196 KB |
++
++Kernel and userspace speed are unchanged (flash and PSRAM go through the same quad-SPI
++controller with the same timing; there is no cache). Kernel patch:
++`bldroot/board/kianv/rv32ima/patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch`
++(`CONFIG_NOMMU_XIP_KERNEL`, fragment `xip/linux-xip.fragment`).
+diff --git a/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch b/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch
+new file mode 100644
+index 0000000..e83ec2d
+--- /dev/null
++++ b/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch
+@@ -0,0 +1,298 @@
++diff --git a/arch/riscv/Kconfig b/arch/riscv/Kconfig
++index bffbd869a..69562f374 100644
++--- a/arch/riscv/Kconfig
+++++ b/arch/riscv/Kconfig
++@@ -97,8 +97,8 @@ config RISCV
++ 	select HAVE_ARCH_AUDITSYSCALL
++ 	select HAVE_ARCH_HUGE_VMALLOC if HAVE_ARCH_HUGE_VMAP
++ 	select HAVE_ARCH_HUGE_VMAP if MMU && 64BIT && !XIP_KERNEL
++-	select HAVE_ARCH_JUMP_LABEL if !XIP_KERNEL
++-	select HAVE_ARCH_JUMP_LABEL_RELATIVE if !XIP_KERNEL
+++	select HAVE_ARCH_JUMP_LABEL if !XIP_KERNEL && !NOMMU_XIP_KERNEL
+++	select HAVE_ARCH_JUMP_LABEL_RELATIVE if !XIP_KERNEL && !NOMMU_XIP_KERNEL
++ 	select HAVE_ARCH_KASAN if MMU && 64BIT
++ 	select HAVE_ARCH_KASAN_VMALLOC if MMU && 64BIT
++ 	select HAVE_ARCH_KFENCE if MMU && 64BIT
++@@ -141,7 +141,7 @@ config RISCV
++ 	select HAVE_PERF_REGS
++ 	select HAVE_PERF_USER_STACK_DUMP
++ 	select HAVE_POSIX_CPU_TIMERS_TASK_WORK
++-	select HAVE_PREEMPT_DYNAMIC_KEY if !XIP_KERNEL
+++	select HAVE_PREEMPT_DYNAMIC_KEY if !XIP_KERNEL && !NOMMU_XIP_KERNEL
++ 	select HAVE_REGS_AND_STACK_ACCESS_API
++ 	select HAVE_RETHOOK if !XIP_KERNEL
++ 	select HAVE_RSEQ
++@@ -161,7 +161,7 @@ config RISCV
++ 	select OF_IRQ
++ 	select PCI_DOMAINS_GENERIC if PCI
++ 	select PCI_MSI if PCI
++-	select RISCV_ALTERNATIVE if !XIP_KERNEL
+++	select RISCV_ALTERNATIVE if !XIP_KERNEL && !NOMMU_XIP_KERNEL
++ 	select RISCV_INTC
++ 	select RISCV_TIMER if RISCV_SBI
++ 	select SIFIVE_PLIC
++@@ -962,6 +962,23 @@ config XIP_PHYS_ADDR
++ 	  be linked for and stored to.  This address is dependent on your
++ 	  own flash usage.
++ 
+++config NOMMU_XIP_KERNEL
+++	bool "Execute-In-Place kernel from memory-mapped flash (no MMU)"
+++	depends on !MMU && RISCV_M_MODE && !SMP && !XIP_KERNEL
+++	help
+++	  Link the kernel so that its text and read-only data stay in
+++	  memory-mapped (read-only) flash and are executed in place, while
+++	  writable data and BSS live in RAM.  The kernel copies its data
+++	  section from flash to RAM itself at entry, so the boot loader only
+++	  has to jump to NOMMU_XIP_FLASH_ADDR with a0 = hartid, a1 = dtb.
+++	  Saves the size of .text + .rodata (and the built-in initramfs) in RAM
+++	  and the time to copy them.
+++
+++config NOMMU_XIP_FLASH_ADDR
+++	hex "Flash address the XIP kernel is stored at and linked for"
+++	depends on NOMMU_XIP_KERNEL
+++	default "0x20200000"
+++
++ config RISCV_ISA_FALLBACK
++ 	bool "Permit falling back to parsing riscv,isa for extension support by default"
++ 	default y
++diff --git a/arch/riscv/kernel/head.S b/arch/riscv/kernel/head.S
++index 4236a69c3..a1a1d50a5 100644
++--- a/arch/riscv/kernel/head.S
+++++ b/arch/riscv/kernel/head.S
++@@ -223,6 +223,25 @@ SYM_CODE_START(_start_kernel)
++ 	csrr a0, CSR_MHARTID
++ #endif /* CONFIG_RISCV_M_MODE */
++ 
+++#ifdef CONFIG_NOMMU_XIP_KERNEL
+++	/*
+++	 * Text and rodata execute in place from flash; copy the initial
+++	 * contents of the writable sections from flash to RAM before anything
+++	 * (hart lottery, boot_cpu_hartid, the stack) touches them.
+++	 */
+++	la t0, _data_loc
+++	la t1, _sdata
+++	la t2, _edata_copy
+++	bgeu t1, t2, .Lxip_copy_done
+++.Lxip_copy:
+++	lw t3, 0(t0)
+++	sw t3, 0(t1)
+++	addi t0, t0, 4
+++	addi t1, t1, 4
+++	bltu t1, t2, .Lxip_copy
+++.Lxip_copy_done:
+++#endif
+++
++ 	/* Load the global pointer */
++ 	load_global_pointer
++ 
++diff --git a/arch/riscv/kernel/setup.c b/arch/riscv/kernel/setup.c
++index 4f73c0ae4..069508a83 100644
++--- a/arch/riscv/kernel/setup.c
+++++ b/arch/riscv/kernel/setup.c
++@@ -112,6 +112,18 @@ static int __init add_kernel_resources(void)
++ 	kimage_res.end = bss_res.end;
++ 	kimage_res.flags = IORESOURCE_SYSTEM_RAM | IORESOURCE_BUSY;
++ 
+++	if (IS_ENABLED(CONFIG_NOMMU_XIP_KERNEL)) {
+++		/* text and rodata stay in flash: only data and bss are RAM */
+++		kimage_res.start = __pa_symbol(_sdata);
+++		ret = add_resource(&iomem_resource, &kimage_res);
+++		if (ret < 0)
+++			return ret;
+++		ret = add_resource(&kimage_res, &data_res);
+++		if (ret < 0)
+++			return ret;
+++		return add_resource(&kimage_res, &bss_res);
+++	}
+++
++ 	ret = add_resource(&iomem_resource, &kimage_res);
++ 	if (ret < 0)
++ 		return ret;
++diff --git a/arch/riscv/kernel/vmlinux-nommu-xip.lds.S b/arch/riscv/kernel/vmlinux-nommu-xip.lds.S
++new file mode 100644
++index 000000000..8a019afb7
++--- /dev/null
+++++ b/arch/riscv/kernel/vmlinux-nommu-xip.lds.S
++@@ -0,0 +1,156 @@
+++/* SPDX-License-Identifier: GPL-2.0-only */
+++/*
+++ * Linker script for a no-MMU kernel executing in place from memory-mapped
+++ * flash (CONFIG_NOMMU_XIP_KERNEL).
+++ *
+++ * Flash (VMA == flash address, linked at CONFIG_NOMMU_XIP_FLASH_ADDR):
+++ *   head text, init text, text, rodata, initcall tables, built-in initramfs
+++ * RAM (VMA == KERNEL_LINK_ADDR == PAGE_OFFSET, initial contents stored in
+++ * flash right after rodata at _data_loc and copied by head.S):
+++ *   data, ro_after_init, init data, BSS
+++ *
+++ * Image file offsets are LMAs: the image is written to flash at
+++ * CONFIG_NOMMU_XIP_FLASH_ADDR and the boot loader jumps there.
+++ */
+++
+++#include <asm/pgtable.h>
+++#define LOAD_OFFSET CONFIG_NOMMU_XIP_FLASH_ADDR
+++/* __ro_after_init data must be writable at boot: keep it out of rodata */
+++#define RO_AFTER_INIT_DATA
+++
+++#include <asm/vmlinux.lds.h>
+++#include <asm/page.h>
+++#include <asm/cache.h>
+++#include <asm/thread_info.h>
+++
+++OUTPUT_ARCH(riscv)
+++ENTRY(_start)
+++
+++jiffies = jiffies_64;
+++
+++SECTIONS
+++{
+++	/* ---- flash, executed / read in place ---- */
+++	. = LOAD_OFFSET;
+++	_xiprom = .;
+++	_start = .;
+++	HEAD_TEXT_SECTION
+++	INIT_TEXT_SECTION(16)
+++	/* we have to discard exit text and such at runtime, not link time */
+++	__exittext_begin = .;
+++	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET)
+++	{
+++		EXIT_TEXT
+++	}
+++	__exittext_end = .;
+++
+++	.text : AT(ADDR(.text) - LOAD_OFFSET) {
+++		_text = .;
+++		_stext = .;
+++		TEXT_TEXT
+++		SCHED_TEXT
+++		LOCK_TEXT
+++		KPROBES_TEXT
+++		ENTRY_TEXT
+++		IRQENTRY_TEXT
+++		SOFTIRQENTRY_TEXT
+++		_etext = .;
+++	}
+++	RO_DATA(L1_CACHE_BYTES)
+++	.srodata : AT(ADDR(.srodata) - LOAD_OFFSET) {
+++		*(.srodata*)
+++	}
+++	.init.rodata : AT(ADDR(.init.rodata) - LOAD_OFFSET) {
+++		INIT_SETUP(16)
+++		INIT_CALLS
+++		CON_INITCALL
+++		INIT_RAM_FS
+++	}
+++	. = ALIGN(16);
+++	_exiprom = .;
+++
+++	/* ---- RAM; initial contents stored in flash at _data_loc ---- */
+++	_data_loc = .;
+++	. = KERNEL_LINK_ADDR;
+++
+++#undef LOAD_OFFSET
+++#define LOAD_OFFSET (KERNEL_LINK_ADDR - (_data_loc - CONFIG_NOMMU_XIP_FLASH_ADDR))
+++
+++	_sdata = .;
+++	_data = .;
+++	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
+++	.sdata : AT(ADDR(.sdata) - LOAD_OFFSET) {
+++		__global_pointer$ = . + 0x800;
+++		*(.sdata*)
+++	}
+++	.got : AT(ADDR(.got) - LOAD_OFFSET) { *(.got*) }
+++
+++	. = ALIGN(8);
+++	__start_ro_after_init = .;
+++	.data.ro_after_init : AT(ADDR(.data.ro_after_init) - LOAD_OFFSET) {
+++		*(.data..ro_after_init)
+++	}
+++	__end_ro_after_init = .;
+++	_edata = .;
+++
+++	. = ALIGN(PAGE_SIZE);
+++	__init_begin = .;
+++	__init_data_begin = .;
+++	.init.data : AT(ADDR(.init.data) - LOAD_OFFSET) {
+++		INIT_DATA
+++	}
+++	.init.pi : AT(ADDR(.init.pi) - LOAD_OFFSET) {
+++		KEEP(*(.init.pi*))
+++	}
+++	.init.bss : AT(ADDR(.init.bss) - LOAD_OFFSET) {
+++		KEEP(*(.init.bss*))
+++	}
+++	.exit.data : AT(ADDR(.exit.data) - LOAD_OFFSET) {
+++		EXIT_DATA
+++	}
+++	PERCPU_SECTION(L1_CACHE_BYTES)
+++
+++	. = ALIGN(8);
+++	__soc_early_init_table : AT(ADDR(__soc_early_init_table) - LOAD_OFFSET) {
+++		__soc_early_init_table_start = .;
+++		KEEP(*(__soc_early_init_table))
+++		__soc_early_init_table_end = .;
+++	}
+++	__soc_builtin_dtb_table : AT(ADDR(__soc_builtin_dtb_table) - LOAD_OFFSET) {
+++		__soc_builtin_dtb_table_start = .;
+++		KEEP(*(__soc_builtin_dtb_table))
+++		__soc_builtin_dtb_table_end = .;
+++	}
+++	.rel.dyn : AT(ADDR(.rel.dyn) - LOAD_OFFSET) {
+++		*(.rel.dyn*)
+++	}
+++	.rela.dyn : AT(ADDR(.rela.dyn) - LOAD_OFFSET) {
+++		*(.rela .rela*)
+++	}
+++	.alternative : AT(ADDR(.alternative) - LOAD_OFFSET) {
+++		__alt_start = .;
+++		KEEP(*(.alternative))
+++		__alt_end = .;
+++	}
+++	__init_data_end = .;
+++
+++	/* end of what head.S copies from flash; trailing marker gets its LMA */
+++	. = ALIGN(16);
+++	.data.endmark : AT(ADDR(.data.endmark) - LOAD_OFFSET) { LONG(0x58495045) }
+++	_edata_copy = .;
+++	_edata_loc = LOADADDR(.data.endmark) + SIZEOF(.data.endmark) + CONFIG_NOMMU_XIP_FLASH_ADDR;
+++
+++	. = ALIGN(PAGE_SIZE);
+++	__init_end = .;
+++
+++	BSS_SECTION(PAGE_SIZE, PAGE_SIZE, 0)
+++	. = ALIGN(PAGE_SIZE);
+++	_end = .;
+++
+++	STABS_DEBUG
+++	DWARF_DEBUG
+++	ELF_DETAILS
+++	.riscv.attributes 0 : { *(.riscv.attributes) }
+++
+++	DISCARDS
+++}
++diff --git a/arch/riscv/kernel/vmlinux.lds.S b/arch/riscv/kernel/vmlinux.lds.S
++index 002ca58dd..5f9719219 100644
++--- a/arch/riscv/kernel/vmlinux.lds.S
+++++ b/arch/riscv/kernel/vmlinux.lds.S
++@@ -9,6 +9,8 @@
++ 
++ #ifdef CONFIG_XIP_KERNEL
++ #include "vmlinux-xip.lds.S"
+++#elif defined(CONFIG_NOMMU_XIP_KERNEL)
+++#include "vmlinux-nommu-xip.lds.S"
++ #else
++ 
++ #include <asm/pgtable.h>
++diff --git a/arch/riscv/mm/init.c b/arch/riscv/mm/init.c
++index 32cad6a65..b9558f0fe 100644
++--- a/arch/riscv/mm/init.c
+++++ b/arch/riscv/mm/init.c
++@@ -200,7 +200,7 @@ static void __init setup_bootmem(void)
++ 	phys_addr_t max_mapped_addr;
++ 	phys_addr_t phys_ram_end, vmlinux_start;
++ 
++-	if (IS_ENABLED(CONFIG_XIP_KERNEL))
+++	if (IS_ENABLED(CONFIG_XIP_KERNEL) || IS_ENABLED(CONFIG_NOMMU_XIP_KERNEL))
++ 		vmlinux_start = __pa_symbol(&_sdata);
++ 	else
++ 		vmlinux_start = __pa_symbol(&_start);
+diff --git a/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile b/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
+index 205fa3a..60b9195 100644
+--- a/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
++++ b/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
+@@ -9,8 +9,14 @@ TOOLCHAIN_PREFIX ?= $(TOOLCHAIN_PATH)/riscv32-buildroot-linux-uclibc
+ CPU_FREQ ?= 30000000
+ SPI_FREQ ?= 10000000
+ BAUDRATE ?= 115200
++ifeq ($(XIP_KERNEL),1)
++IMAGE_SIZE ?= 0
++else
+ IMAGE_SIZE ?= $(shell wc -c < ../Image)
++endif
+ SOC_HAS_SPI ?= 0
++XIP_KERNEL ?= 0
++WORD_COPY ?= 0
+ 
+ LDS_FILE ?= kianv.ld
+ START_FILE = crt0.S
+@@ -22,7 +28,7 @@ RVCPPFLAGS = -fno-exceptions -fno-enforce-eh-specs
+ RVLDFLAGS = -Wl,-melf32lriscv -Wl,-belf32-littleriscv -Wl,--no-relax
+ RVCFLAGS = -fno-pic -march=rv32ima -mabi=ilp32 -fno-stack-protector -w -Wl,--no-relax -ffreestanding -Wl,--strip-debug,-Map=bootloader.map
+ RVCFLAGS += -nostartfiles -DCPU_FREQ=$(CPU_FREQ) -DSPI_FREQ=$(SPI_FREQ) -DBAUDRATE=$(BAUDRATE)
+-RVCFLAGS += -DIMAGE_SIZE=$(IMAGE_SIZE) -DSOC_HAS_SPI=$(SOC_HAS_SPI) -Wl,--no-warn-rwx-segments
++RVCFLAGS += -DIMAGE_SIZE=$(IMAGE_SIZE) -DSOC_HAS_SPI=$(SOC_HAS_SPI) -DXIP_KERNEL=$(XIP_KERNEL) -DWORD_COPY=$(WORD_COPY) -Wl,--no-warn-rwx-segments
+ 
+ all: bootloader.bin
+ 	@echo "Image size is $(IMAGE_SIZE) bytes"
+diff --git a/asic/os/ulinux_asic_kianv_soc/bootloader/bootloader.c b/asic/os/ulinux_asic_kianv_soc/bootloader/bootloader.c
+index 7827d35..426bd68 100644
+--- a/asic/os/ulinux_asic_kianv_soc/bootloader/bootloader.c
++++ b/asic/os/ulinux_asic_kianv_soc/bootloader/bootloader.c
+@@ -48,6 +48,14 @@ void* memcpy_verbose(void* dest, const void* src, size_t count) {
+     return dest;
+ }
+ 
++/* one flash read and one PSRAM write per 32-bit word instead of per byte */
++void memcpy_words_verbose(uint32_t *d, const uint32_t *s, size_t words) {
++    for (size_t i = 0; i < words; i++) {
++        if ((i & (CHUNK_SIZE / 4 - 1)) == 0) printf(".");
++        d[i] = s[i];
++    }
++}
++
+ int main() {
+   uint32_t freq = CPU_FREQ;
+   *((volatile uint32_t *) 0x10000010) = ((freq/10000) << 16) | (freq/BAUDRATE);
+@@ -61,13 +69,26 @@ int main() {
+   printf("-----------------------------------------\n");
+ 
+ 
++#if XIP_KERNEL
++  /*
++   * The kernel executes in place from flash and copies its own data
++   * section to PSRAM: nothing to load, no image size to know.
++   */
++  printf("starting kernel (XIP from flash)\n");
++  void *kernel = (void *)KERNEL_IMAGE;
++#else
+   printf("loading kernel Image from flash ");
++#if WORD_COPY
++  memcpy_words_verbose((uint32_t *)SDRAM_START, (const uint32_t *)KERNEL_IMAGE, (IMAGE_SIZE + 3) / 4);
++#else
+   memcpy_verbose(SDRAM_START, KERNEL_IMAGE, IMAGE_SIZE);
++#endif
+   printf("\nstarting kernel\n");
++  void *kernel = (void *)SDRAM_START;
++#endif
+ 
+   int hartId = 0;
+   char *dtb = (char *)DTB_TARGET;
+-  void *kernel = (void *)SDRAM_START;
+   func_ptr kernel_entry = (func_ptr)kernel;
+   kernel_entry(hartId, dtb);
+ }
+diff --git a/asic/os/ulinux_asic_kianv_soc/xip/.gitignore b/asic/os/ulinux_asic_kianv_soc/xip/.gitignore
+new file mode 100644
+index 0000000..cd33c46
+--- /dev/null
++++ b/asic/os/ulinux_asic_kianv_soc/xip/.gitignore
+@@ -0,0 +1,3 @@
++build/
++Image
++bootloader.bin
+diff --git a/asic/os/ulinux_asic_kianv_soc/xip/linux-xip.fragment b/asic/os/ulinux_asic_kianv_soc/xip/linux-xip.fragment
+new file mode 100644
+index 0000000..503ac0c
+--- /dev/null
++++ b/asic/os/ulinux_asic_kianv_soc/xip/linux-xip.fragment
+@@ -0,0 +1,4 @@
++# Kernel text/rodata execute in place from the SPI flash, data/bss in PSRAM.
++# Needs patches/linux/0010-riscv-nommu-execute-in-place-kernel.patch.
++CONFIG_NOMMU_XIP_KERNEL=y
++CONFIG_NOMMU_XIP_FLASH_ADDR=0x20200000
+diff --git a/asic/os/ulinux_asic_kianv_soc/xip/mkflash.py b/asic/os/ulinux_asic_kianv_soc/xip/mkflash.py
+new file mode 100644
+index 0000000..c79c5b1
+--- /dev/null
++++ b/asic/os/ulinux_asic_kianv_soc/xip/mkflash.py
+@@ -0,0 +1,7 @@
++"""Build a 32 MiB QEMU pflash image: stub at 0, XIP kernel Image at 0x200000."""
++import sys
++stub, img, out = sys.argv[1:4]
++f = bytearray(b'\xff' * (32 << 20))
++s = open(stub, 'rb').read(); f[0:len(s)] = s
++i = open(img, 'rb').read(); f[0x200000:0x200000 + len(i)] = i
++open(out, 'wb').write(f)
+diff --git a/asic/os/ulinux_asic_kianv_soc/xip/qemu-flash-stub.S b/asic/os/ulinux_asic_kianv_soc/xip/qemu-flash-stub.S
+new file mode 100644
+index 0000000..5bde88b
+--- /dev/null
++++ b/asic/os/ulinux_asic_kianv_soc/xip/qemu-flash-stub.S
+@@ -0,0 +1,7 @@
++/* QEMU virt boots from pflash0 (0x20000000) when one is given: jump to the XIP kernel like the bootloader does (a0 = hartid, a1 = QEMU dtb). */
++	.section .text
++	.globl _start
++_start:
++	/* a0 = hartid, a1 = fdt (from QEMU reset vector) */
++	li t0, 0x20200000
++	jr t0

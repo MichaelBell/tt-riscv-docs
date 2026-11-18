@@ -1,0 +1,14 @@
+# KianV uLinux: RV32IMA (no C), ilp32, nommu Linux with uClibc.
+# Rust builds a PIE staticlib; Buildroot gcc + elf2flt does the final link.
+[build]
+target = "riscv32ima-unknown-none-elf"
+
+[unstable]
+build-std = ["core", "alloc"]
+
+[target.riscv32ima-unknown-none-elf]
+rustflags = [
+  "-C", "relocation-model=pie",
+  "-C", "code-model=medium",
+  "-C", "target-feature=-c",
+]

@@ -1,0 +1,10 @@
+[build]
+target = "riscv32ec-tinyqv-none-elf.json"
+
+[target.riscv32ec-tinyqv-none-elf]
+rustflags = ["-C", "link-arg=-Ttinyqv.ld"]
+
+[unstable]
+build-std = ["core"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true

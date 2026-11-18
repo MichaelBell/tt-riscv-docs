@@ -1,0 +1,5 @@
+menu "Tiny Tapeout RISC-V example programs (installed in /root)"
+source "$BR2_EXTERNAL_TT_RISCV_PATH/package/tt-hello-7seg/Config.in"
+source "$BR2_EXTERNAL_TT_RISCV_PATH/package/tt-rust-nostd/Config.in"
+source "$BR2_EXTERNAL_TT_RISCV_PATH/package/tt-rust-std/Config.in"
+endmenu

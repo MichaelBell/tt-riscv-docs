@@ -1,0 +1,8 @@
+config BR2_PACKAGE_TT_RUST_STD
+	bool "rust_std_hello, rust_std_demo (experimental)"
+	default y
+	help
+	  Rust programs using the full standard library, with a custom
+	  target, patched libc/std and a pthread shim. Needs rustup with a
+	  nightly toolchain and rust-src, and network access to crates.io
+	  (skipped with a warning without cargo). Source: linux/apps/rust-std.

@@ -1,0 +1,7 @@
+config BR2_PACKAGE_TT_RUST_NOSTD
+	bool "rust_nostd_hello"
+	default y
+	help
+	  no_std Rust userspace demo. Needs rustup with a nightly toolchain
+	  and rust-src on the build machine (skipped with a warning without
+	  cargo). Source: linux/apps/rust-nostd.

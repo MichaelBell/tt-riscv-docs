@@ -1,0 +1,25 @@
+[package]
+name = "tinyqv-hello"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tinyqv"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tinyqv-hello"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"

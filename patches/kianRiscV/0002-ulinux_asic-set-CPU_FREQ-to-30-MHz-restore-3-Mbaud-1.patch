@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Uri Shaked <uri@urishaked.com>
+Date: Thu, 28 May 2026 14:59:06 +0000
+Subject: [PATCH 2/7] ulinux_asic: set CPU_FREQ to 30 MHz, restore 3 Mbaud / 10
+ MHz SPI defaults
+
+The gf180mcu SoC actually runs at 30 MHz, not 16 MHz, so revert UART and
+SPI defaults to the original fast values (BAUDRATE=3 Mbaud, SPI_FREQ=10 MHz).
+At 30 MHz the UART divider lands cleanly on 10 (3 Mbaud) and SPI on 3.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ asic/os/ulinux_asic_kianv_soc/Makefile                    | 8 ++++----
+ .../bldroot/board/kianv/rv32ima/kianv.dts                 | 2 +-
+ asic/os/ulinux_asic_kianv_soc/bootloader/Makefile         | 6 +++---
+ 3 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/asic/os/ulinux_asic_kianv_soc/Makefile b/asic/os/ulinux_asic_kianv_soc/Makefile
+index 3c9be71..93f8056 100644
+--- a/asic/os/ulinux_asic_kianv_soc/Makefile
++++ b/asic/os/ulinux_asic_kianv_soc/Makefile
+@@ -8,10 +8,10 @@ DIR := buildroot
+ CC = gcc
+ CFLAGS = -Wall -g
+ 
+-# Default configurations for the bootloader (gf180mcu: 16 MHz core, 16 MiB QSPI PSRAM)
+-CPU_FREQ ?= 16000000
+-SPI_FREQ ?= 8000000
+-BAUDRATE ?= 115200
++# Default configurations for the bootloader (gf180mcu: 30 MHz core, 16 MiB QSPI PSRAM)
++CPU_FREQ ?= 30000000
++SPI_FREQ ?= 10000000
++BAUDRATE ?= 3000000
+ SOC_HAS_SPI ?= 0
+ 
+ DTS_FILE ?= bldroot/board/kianv/rv32ima/kianv.dts
+diff --git a/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/kianv.dts b/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/kianv.dts
+index 8795b45..937603b 100644
+--- a/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/kianv.dts
++++ b/asic/os/ulinux_asic_kianv_soc/bldroot/board/kianv/rv32ima/kianv.dts
+@@ -7,7 +7,7 @@
+ 	model = "riscv-minimal-nommu,qemu";
+ 
+ 	chosen {
+-		bootargs = "earlycon=uart8250,mmio,0x10000000,115200 console=ttyS0 debug";
++		bootargs = "earlycon=uart8250,mmio,0x10000000,3000000 console=ttyS0 debug";
+ 	};
+ 
+ 	memory@80000000 {
+diff --git a/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile b/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
+index 35adbf5..68135c6 100644
+--- a/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
++++ b/asic/os/ulinux_asic_kianv_soc/bootloader/Makefile
+@@ -6,9 +6,9 @@ TOOLCHAIN_PATH ?= ../buildroot/output/host/bin
+ 
+ TOOLCHAIN_PREFIX ?= $(TOOLCHAIN_PATH)/riscv32-buildroot-linux-uclibc
+ 
+-CPU_FREQ ?= 16000000
+-SPI_FREQ ?= 8000000
+-BAUDRATE ?= 115200
++CPU_FREQ ?= 30000000
++SPI_FREQ ?= 10000000
++BAUDRATE ?= 3000000
+ IMAGE_SIZE ?= $(shell wc -c < ../Image)
+ SOC_HAS_SPI ?= 0
+ 

@@ -1,0 +1,6 @@
+config BR2_PACKAGE_TT_HELLO_7SEG
+	bool "hello_7seg"
+	default y
+	help
+	  HELLO then 0-9 on the demo board's 7-segment display, through the
+	  KianV GPIO registers. Source: linux/apps/hello-7seg.

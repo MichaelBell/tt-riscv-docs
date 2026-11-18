@@ -1,0 +1,193 @@
+name: Build images
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a GitHub release with the built images"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  kianv-ulinux:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential device-tree-compiler cpio rsync file wget unzip bc
+          # Newer Ubuntu ships the RISC-V emulators in qemu-system-riscv instead of qemu-system-misc.
+          sudo apt-get install -y qemu-system-riscv || sudo apt-get install -y qemu-system-misc
+          command -v qemu-system-riscv32
+
+      # Buildroot downloads and the toolchain take most of the build time. The cache is saved even
+      # when the build fails, so the next run resumes where this one stopped (Buildroot is incremental);
+      # restore picks the newest entry for the same pins and patches, else the newest on this runner.
+      - name: Restore Buildroot dl + output
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/kianRiscV/asic/os/ulinux_asic_kianv_soc/buildroot/dl
+            build/kianRiscV/asic/os/ulinux_asic_kianv_soc/buildroot/output
+          key: br-ulinux-ubuntu-26.04-${{ hashFiles('pins.env', 'patches/kianRiscV/**', 'scripts/build-ulinux.sh') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            br-ulinux-ubuntu-26.04-${{ hashFiles('pins.env', 'patches/kianRiscV/**', 'scripts/build-ulinux.sh') }}-
+            br-ulinux-ubuntu-26.04-
+
+      - name: Build (image + SDK)
+        run: BUILD_SDK=1 scripts/build-ulinux.sh out/kianv-ulinux
+
+      - name: Save Buildroot dl + output
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/kianRiscV/asic/os/ulinux_asic_kianv_soc/buildroot/dl
+            build/kianRiscV/asic/os/ulinux_asic_kianv_soc/buildroot/output
+          key: br-ulinux-ubuntu-26.04-${{ hashFiles('pins.env', 'patches/kianRiscV/**', 'scripts/build-ulinux.sh') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Boot test in QEMU
+        run: python3 linux/qemu/run.py --image out/kianv-ulinux/Image --smoke
+
+      # The SDK path of guides/linux-apps.md: build programs with the released SDK alone.
+      - name: Build the programs with the SDK
+        run: |
+          mkdir -p build/sdk
+          tar xzf out/kianv-ulinux/kianv-ulinux-sdk.tar.gz -C build/sdk
+          SDK=$(echo "$PWD"/build/sdk/*_sdk-buildroot)
+          (cd "$SDK" && ./relocate-sdk.sh)
+          for app in hello-7seg rust-nostd; do
+            make -C linux/apps/$app CROSS_COMPILE="$SDK/bin/riscv32-buildroot-linux-uclibc-" DESTDIR="$PWD/build/sdk-out" install
+          done
+          for f in build/sdk-out/root/*; do "$SDK/bin/riscv32-buildroot-linux-uclibc-flthdr" -p "$f" | head -3; done
+
+      - name: Build the XIP kernel (experimental)
+        id: xip
+        continue-on-error: true
+        working-directory: build/kianRiscV/asic/os/ulinux_asic_kianv_soc
+        env:
+          BR2_EXTERNAL: ${{ github.workspace }}/linux/br2-external
+        run: |
+          make xip
+          mkdir -p "$GITHUB_WORKSPACE/out/kianv-ulinux-xip"
+          cp xip/Image xip/bootloader.bin kianv.dtb "$GITHUB_WORKSPACE/out/kianv-ulinux-xip/"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kianv-ulinux
+          path: out/kianv-ulinux*
+          if-no-files-found: error
+
+  kianv-zephyr:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build (Docker)
+        run: scripts/build-zephyr.sh out/kianv-zephyr
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kianv-zephyr
+          path: out/kianv-zephyr
+          if-no-files-found: error
+
+  kianv-memtest:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-riscv64-unknown-elf
+      - name: Build
+        run: scripts/build-memtest.sh out/kianv-memtest
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kianv-memtest
+          path: out/kianv-memtest
+          if-no-files-found: error
+
+  tinyqv:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the Rust example
+        run: scripts/build-tinyqv-rust.sh out/tinyqv-rust
+      - name: Fetch TinyQV MicroPython
+        run: scripts/fetch-tinyqv-micropython.sh out/tinyqv-micropython
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tinyqv
+          path: out/tinyqv-*
+          if-no-files-found: error
+
+  # Manual runs always collect the release files (a dry run when "release" is unchecked);
+  # only a run with "release" checked publishes them.
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [kianv-ulinux, kianv-zephyr, kianv-memtest, tinyqv]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: art
+      - name: Collect release files
+        run: |
+          set -euo pipefail
+          mkdir rel
+          a=art
+          cp $a/kianv-ulinux/kianv-ulinux/bootloader.bin rel/kianv-ulinux-bootloader.bin
+          cp $a/kianv-ulinux/kianv-ulinux/kianv.dtb      rel/kianv-ulinux-kianv.dtb
+          cp $a/kianv-ulinux/kianv-ulinux/Image          rel/kianv-ulinux-Image
+          cp $a/kianv-ulinux/kianv-ulinux/kianv-ulinux-sdk.tar.gz rel/kianv-ulinux-sdk.tar.gz
+          if [ -d $a/kianv-ulinux/kianv-ulinux-xip ]; then
+            cp $a/kianv-ulinux/kianv-ulinux-xip/bootloader.bin rel/experimental-kianv-ulinux-xip-bootloader.bin
+            cp $a/kianv-ulinux/kianv-ulinux-xip/Image          rel/experimental-kianv-ulinux-xip-Image
+          fi
+          cp $a/kianv-zephyr/firmware_dualboot_nor_payload.bin rel/kianv-zephyr-dualboot.bin
+          cp $a/kianv-zephyr/VERSIONS.txt                      rel/kianv-zephyr-VERSIONS.txt
+          cp $a/kianv-memtest/memtest.bin                      rel/kianv-memtest.bin
+          cp $a/tinyqv/tinyqv-rust/tinyqv-hello.bin            rel/tinyqv-rust-hello.bin
+          cp $a/tinyqv/tinyqv-micropython/*.bin                rel/tinyqv-micropython.bin
+          (cd rel && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+      - name: Write release notes
+        run: |
+          {
+            echo "Images built by [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) from ${GITHUB_SHA}."
+            echo
+            echo "Pinned upstream sources (\`pins.env\`):"
+            echo '```'
+            grep -E '^[A-Z_]+=' pins.env
+            echo '```'
+            echo
+            echo "Patches on kianRiscV:"
+            ls patches/kianRiscV | sed 's/^/- /'
+            echo
+            echo "Flash offsets and steps: see the guides in the README. Silicon testing is manual: see the release checklist."
+            echo
+            echo '```'
+            cat rel/SHA256SUMS
+            echo '```'
+          } > notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: rel
+          if-no-files-found: error
+      - name: Publish
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="images-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" rel/* --title "$tag" --notes-file notes.md

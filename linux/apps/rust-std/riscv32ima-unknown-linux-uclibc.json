@@ -1,0 +1,33 @@
+{
+  "arch": "riscv32",
+  "code-model": "medium",
+  "cpu": "generic-rv32",
+  "crt-objects-fallback": "false",
+  "crt-static-default": true,
+  "crt-static-respected": true,
+  "data-layout": "e-m:e-p:32:32-i64:64-n32-S128",
+  "dynamic-linking": false,
+  "env": "uclibc",
+  "features": "+m,+a,+zicsr,+zifencei,-c,-f,-d",
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "riscv32-buildroot-linux-uclibc-gcc",
+  "linker-flavor": "gnu-cc",
+  "llvm-abiname": "ilp32",
+  "llvm-target": "riscv32-unknown-linux-gnu",
+  "max-atomic-width": 32,
+  "metadata": {
+    "description": "RISC-V 32 RV32IMA nommu Linux with uClibc-ng (FLAT binaries via elf2flt)",
+    "host_tools": false,
+    "std": true,
+    "tier": 3
+  },
+  "os": "linux",
+  "panic-strategy": "abort",
+  "position-independent-executables": true,
+  "static-position-independent-executables": true,
+  "relro-level": "off",
+  "target-family": ["unix"],
+  "target-mcount": "_mcount",
+  "target-pointer-width": 32
+}
