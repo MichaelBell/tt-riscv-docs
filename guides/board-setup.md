@@ -15,12 +15,12 @@ Every guide in this repo uses the same setup.
 
 ## Tools
 
-| Tool                                                                       | Use                                                                                                                                   |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| [Tiny Tapeout Flasher](https://tinytapeout.github.io/tinytapeout-flasher/) | Write files to the QSPI Pmod flash. Choose **Custom**, enter the offset **in decimal**, pick the file, **Flash**. One file at a time. |
-| [TinyQV programmer](https://program.tinyqv.com)                            | Flash and run TinyQV programs, with a built-in console.                                                                               |
-| [Tiny Tapeout Commander](https://commander.tinytapeout.com)                | The board's MicroPython REPL in the browser (REPL tab). Any serial terminal or `mpremote` works too.                                  |
-| [`tools/uart_console.py`](../tools/uart_console.py)                        | Starts a KianV-style SoC and bridges its UART to the REPL.                                                                            |
+| Tool                                                                       | Use                                                                                                                                                                                     |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Tiny Tapeout Flasher](https://tinytapeout.github.io/tinytapeout-flasher/) | Write files to the QSPI Pmod flash. Pick a **preset** (the KianV images of the latest release are there), or choose **Custom**, enter the offset **in decimal** and pick your own file. |
+| [TinyQV programmer](https://program.tinyqv.com)                            | Flash and run TinyQV programs, with a built-in console.                                                                                                                                 |
+| [Tiny Tapeout Commander](https://commander.tinytapeout.com)                | The board's MicroPython REPL in the browser (REPL tab). Any serial terminal or `mpremote` works too.                                                                                    |
+| [`tools/uart_console.py`](../tools/uart_console.py)                        | Starts a KianV-style SoC and bridges its UART to the REPL.                                                                                                                              |
 
 Close the browser tab of one tool before connecting with another: only one program can hold the serial port.
 
@@ -44,7 +44,7 @@ uart_console.kianv()          # start KianV at 30 MHz and open its console
 Press **Ctrl-]** to leave the console. Ctrl-C is passed to the SoC. MicroPython soft-resets when you
 leave, which returns all pins to the SDK defaults.
 
-## Flash offsets are decimal in the Flasher
+## Flash offsets are decimal in the Flasher (Custom)
 
 | Hex      | Decimal |
 | -------- | ------- |

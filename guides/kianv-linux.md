@@ -14,28 +14,24 @@ Time: about 15 minutes, most of it flashing and booting.
 | tt06                         | `tt_um_kianV_rv32ima_uLinux_SoC` (#910), 30 MHz, 8 MiB                        | "KianV uLinux Image (TT06)" preset in the Flasher | tested on silicon (RP2040 board, shell after about 185 s) |
 | tt05, ttihp0p1               | `tt_um_kianV_rv32ima_uLinux_SoC`                                              | "KianV uLinux Image (TT06)" preset in the Flasher | not verified                                              |
 
-## 1. Get the image
+## 1. Flash
 
-From the [latest release](../../../releases/latest), download:
+Set up the board first: [board-setup.md](board-setup.md). Then open the [Flasher](https://tinytapeout.github.io/tinytapeout-flasher/), connect to the board,
+select the preset **KianV uLinux, 16 MiB**, and click **Flash**. It writes the three files of the
+[latest release](../../../releases/latest); the Image takes several minutes.
 
-- `kianv-ulinux-bootloader.bin`
-- `kianv-ulinux-kianv.dtb`
-- `kianv-ulinux-Image`
+To flash other files (an older release, or your own build from [building.md](building.md)), choose **Custom**
+and flash each file at its offset:
 
-Or build them yourself: [building.md](building.md).
+| File                          | Offset (decimal) |
+| ----------------------------- | ---------------- |
+| `kianv-ulinux-bootloader.bin` | 1048576          |
+| `kianv-ulinux-kianv.dtb`      | 1572864          |
+| `kianv-ulinux-Image`          | 2097152          |
 
-## 2. Flash
+The bootloader and the Image always go together: flash both from the same release or build.
 
-Set up the board first: [board-setup.md](board-setup.md). Then in the
-[Flasher](https://tinytapeout.github.io/tinytapeout-flasher/), choose **Custom** and flash each file:
-
-| File                          | Offset (decimal)                |
-| ----------------------------- | ------------------------------- |
-| `kianv-ulinux-bootloader.bin` | 1048576                         |
-| `kianv-ulinux-kianv.dtb`      | 1572864                         |
-| `kianv-ulinux-Image`          | 2097152 (takes several minutes) |
-
-## 3. Boot
+## 2. Boot
 
 At the board's REPL:
 
@@ -64,7 +60,7 @@ The shell prompt appears about **150 s** after reset. Press Enter if you don't s
 **A few garbled lines after `clk: Disabling unused clocks` are normal.** They appear on every boot,
 when the kernel's serial driver takes over the console.
 
-## 4. Try it
+## 3. Try it
 
 ```sh
 uname -a

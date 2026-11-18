@@ -9,8 +9,9 @@ the original 8 MiB KianV and the 16 MiB variants.
 
 ## Flash
 
-From the [latest release](../../../releases/latest), flash `kianv-zephyr-dualboot.bin` at offset
-**1048576** (0x100000) with the [Flasher](https://tinytapeout.github.io/tinytapeout-flasher/) (**Custom**).
+In the [Flasher](https://tinytapeout.github.io/tinytapeout-flasher/), select the preset **KianV Zephyr + MicroPython dual-boot** and click **Flash**
+(it writes `kianv-zephyr-dualboot.bin` from the [latest release](../../../releases/latest) at 0x100000). For other
+builds, use **Custom** at offset **1048576**.
 It covers 0x100000 - 0x3B1000 and replaces Linux. See [flash-layout.md](flash-layout.md).
 
 ## Boot

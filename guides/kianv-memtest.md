@@ -10,8 +10,9 @@ all 16 MiB KianV variants: ttsky25a, ttsky25b, ttihp25b, ttcad25a, ttgf0p2/0p3.
 
 ## Flash
 
-From the [latest release](../../../releases/latest), flash `kianv-memtest.bin` at offset **1048576**
-(0x100000) with the [Flasher](https://tinytapeout.github.io/tinytapeout-flasher/) (**Custom**).
+In the [Flasher](https://tinytapeout.github.io/tinytapeout-flasher/), select the preset **KianV memtest, 16 MiB PSRAM** and click **Flash**
+(it writes `kianv-memtest.bin` from the [latest release](../../../releases/latest) at 0x100000). For other builds,
+use **Custom** at offset **1048576**.
 This replaces the Linux bootloader; the Linux Image stays in flash.
 
 ## Run
@@ -52,4 +53,5 @@ Notes:
 
 ## Back to Linux
 
-Flash `kianv-ulinux-bootloader.bin` at 1048576 again ([kianv-linux.md](kianv-linux.md)).
+Flash the **KianV uLinux, 16 MiB** preset again, or just `kianv-ulinux-bootloader.bin` at 1048576 with **Custom**
+([kianv-linux.md](kianv-linux.md)).
